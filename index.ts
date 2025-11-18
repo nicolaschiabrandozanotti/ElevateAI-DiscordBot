@@ -155,31 +155,33 @@ client.on('messageReactionAdd', async (reaction, user) => {
     }
   }
 
-  // Fetch del mensaje si está parcial o si no tiene embeds
+  // SIEMPRE hacer fetch del mensaje completo para asegurar que tenemos todos los datos
+  // Esto es especialmente importante después de una reconexión del bot
   let message = reaction.message;
-  if (message.partial) {
-    try {
+  try {
+    // Si el mensaje está parcial, hacer fetch
+    if (message.partial) {
       message = await message.fetch();
       console.log('Mensaje obtenido desde API (estaba parcial)');
-    } catch (error) {
-      console.error('Error obteniendo mensaje:', error);
-      return;
-    }
-  }
-
-  // Si el mensaje no tiene embeds, intentar refrescarlo
-  if (!message.embeds || message.embeds.length === 0) {
-    try {
+    } 
+    // Si el mensaje no tiene embeds o parece incompleto, hacer fetch de todos modos
+    else if (!message.embeds || message.embeds.length === 0 || !message.guild) {
       message = await message.fetch();
-      console.log('Mensaje refrescado desde API (no tenía embeds)');
-    } catch (error) {
-      console.error('Error refrescando mensaje:', error);
-      return;
+      console.log('Mensaje refrescado desde API (datos incompletos)');
     }
+    // Incluso si parece completo, hacer fetch para asegurar que tenemos los datos más recientes
+    // Esto previene problemas después de reconexiones
+    else {
+      message = await message.fetch();
+      console.log('Mensaje refrescado desde API (verificación post-reconexión)');
+    }
+  } catch (error) {
+    console.error('Error obteniendo/refrescando mensaje:', error);
+    return;
   }
 
   if (!message.embeds || message.embeds.length === 0) {
-    console.log('Mensaje sin embeds después de refresh, ignorando');
+    console.log('Mensaje sin embeds después de fetch, ignorando');
     return;
   }
 
@@ -255,25 +257,20 @@ client.on('messageReactionRemove', async (reaction, user) => {
     }
   }
 
-  // Fetch del mensaje si está parcial o si no tiene embeds
+  // SIEMPRE hacer fetch del mensaje completo para asegurar que tenemos todos los datos
   let message = reaction.message;
-  if (message.partial) {
-    try {
+  try {
+    if (message.partial) {
       message = await message.fetch();
-    } catch (error) {
-      console.error('Error obteniendo mensaje:', error);
-      return;
-    }
-  }
-
-  // Si el mensaje no tiene embeds, intentar refrescarlo
-  if (!message.embeds || message.embeds.length === 0) {
-    try {
+    } else if (!message.embeds || message.embeds.length === 0 || !message.guild) {
       message = await message.fetch();
-    } catch (error) {
-      console.error('Error refrescando mensaje:', error);
-      return;
+    } else {
+      // Hacer fetch de todos modos para asegurar datos actualizados
+      message = await message.fetch();
     }
+  } catch (error) {
+    console.error('Error obteniendo/refrescando mensaje:', error);
+    return;
   }
 
   if (!message.embeds || message.embeds.length === 0) return;
