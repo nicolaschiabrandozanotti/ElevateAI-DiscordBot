@@ -145,6 +145,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
   console.log(`Reacción agregada: ${reaction.emoji.name} por ${user.tag}`);
 
+  // Fetch de la reacción si está parcial
   if (reaction.partial) {
     try {
       await reaction.fetch();
@@ -154,9 +155,31 @@ client.on('messageReactionAdd', async (reaction, user) => {
     }
   }
 
-  const message = reaction.message;
+  // Fetch del mensaje si está parcial o si no tiene embeds
+  let message = reaction.message;
+  if (message.partial) {
+    try {
+      message = await message.fetch();
+      console.log('Mensaje obtenido desde API (estaba parcial)');
+    } catch (error) {
+      console.error('Error obteniendo mensaje:', error);
+      return;
+    }
+  }
+
+  // Si el mensaje no tiene embeds, intentar refrescarlo
   if (!message.embeds || message.embeds.length === 0) {
-    console.log('Mensaje sin embeds, ignorando');
+    try {
+      message = await message.fetch();
+      console.log('Mensaje refrescado desde API (no tenía embeds)');
+    } catch (error) {
+      console.error('Error refrescando mensaje:', error);
+      return;
+    }
+  }
+
+  if (!message.embeds || message.embeds.length === 0) {
+    console.log('Mensaje sin embeds después de refresh, ignorando');
     return;
   }
 
@@ -222,6 +245,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
 
+  // Fetch de la reacción si está parcial
   if (reaction.partial) {
     try {
       await reaction.fetch();
@@ -231,7 +255,27 @@ client.on('messageReactionRemove', async (reaction, user) => {
     }
   }
 
-  const message = reaction.message;
+  // Fetch del mensaje si está parcial o si no tiene embeds
+  let message = reaction.message;
+  if (message.partial) {
+    try {
+      message = await message.fetch();
+    } catch (error) {
+      console.error('Error obteniendo mensaje:', error);
+      return;
+    }
+  }
+
+  // Si el mensaje no tiene embeds, intentar refrescarlo
+  if (!message.embeds || message.embeds.length === 0) {
+    try {
+      message = await message.fetch();
+    } catch (error) {
+      console.error('Error refrescando mensaje:', error);
+      return;
+    }
+  }
+
   if (!message.embeds || message.embeds.length === 0) return;
   if (message.embeds[0].title !== '🎯 Sistema de Roles de Reunión') return;
 
