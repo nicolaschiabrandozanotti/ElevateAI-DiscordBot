@@ -1,12 +1,9 @@
 import express from 'express';
-import { Client, GatewayIntentBits, REST, Routes, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
-import dotenv from 'dotenv';
+import { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } from 'discord.js';
 import nacl from 'tweetnacl';
 
-dotenv.config();
-
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Deno.env.get('PORT') || '3000';
 
 // Configuración de Discord
 const client = new Client({
@@ -18,13 +15,13 @@ const client = new Client({
   ],
 });
 
-const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+const rest = new REST({ version: '10' }).setToken(Deno.env.get('DISCORD_TOKEN') || '');
 
 // Middleware para verificar la firma de Discord
 app.use(express.raw({ type: 'application/json' }));
 
 // Verificar firma de Discord (Ed25519)
-function verifySignature(req, res, next) {
+function verifySignature(req: any, res: any, next: any) {
   const signature = req.get('X-Signature-Ed25519');
   const timestamp = req.get('X-Signature-Timestamp');
   const body = req.body;
@@ -33,16 +30,20 @@ function verifySignature(req, res, next) {
     return res.status(401).send('Falta la firma');
   }
 
-  const publicKey = process.env.DISCORD_PUBLIC_KEY;
+  const publicKey = Deno.env.get('DISCORD_PUBLIC_KEY');
   if (!publicKey) {
     return res.status(500).send('Public key no configurada');
   }
 
   try {
+    const timestampBody = new TextEncoder().encode(timestamp + body);
+    const signatureBytes = hexToUint8Array(signature);
+    const publicKeyBytes = hexToUint8Array(publicKey);
+
     const isVerified = nacl.sign.detached.verify(
-      Buffer.from(timestamp + body),
-      Buffer.from(signature, 'hex'),
-      Buffer.from(publicKey, 'hex')
+      timestampBody,
+      signatureBytes,
+      publicKeyBytes
     );
 
     if (!isVerified) {
@@ -57,8 +58,17 @@ function verifySignature(req, res, next) {
   next();
 }
 
+// Función auxiliar para convertir hex a Uint8Array
+function hexToUint8Array(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+  }
+  return bytes;
+}
+
 // Endpoint para interactions
-app.post('/interactions', verifySignature, async (req, res) => {
+app.post('/interactions', verifySignature, async (req: any, res: any) => {
   const interaction = req.body;
 
   // Responder a PING
@@ -88,14 +98,13 @@ app.post('/interactions', verifySignature, async (req, res) => {
         const response = {
           type: 4, // CHANNEL_MESSAGE_WITH_SOURCE
           data: {
-            embeds: [embed],
+            embeds: [embed.toJSON()],
           },
         };
 
         res.json(response);
 
         // Agregar reacciones después de crear el mensaje
-        // Usamos el cliente para obtener el mensaje recién creado
         setTimeout(async () => {
           try {
             const channel = await client.channels.fetch(interaction.channel_id);
@@ -105,14 +114,13 @@ app.post('/interactions', verifySignature, async (req, res) => {
             }
 
             // Buscar el mensaje más reciente del bot en este canal
-            // que tenga el embed de roles
             const messages = await channel.messages.fetch({ limit: 10 });
             const botMessage = messages.find(
-              msg => 
-                msg.author.id === client.user.id && 
+              (msg: any) => 
+                msg.author.id === client.user?.id && 
                 msg.embeds.length > 0 &&
                 msg.embeds[0].title === '🎯 Sistema de Roles de Reunión' &&
-                !msg.reactions.cache.has('👔') // Solo si aún no tiene reacciones
+                !msg.reactions.cache.has('👔')
             );
 
             if (botMessage) {
@@ -129,17 +137,12 @@ app.post('/interactions', verifySignature, async (req, res) => {
       }
     }
   }
-
-  // Manejar reacciones (aunque Discord no envía reacciones directamente al endpoint)
-  // Las reacciones se manejan mediante eventos del cliente
 });
 
 // Manejar reacciones cuando se agregan
 client.on('messageReactionAdd', async (reaction, user) => {
-  // Evitar procesar reacciones del bot
   if (user.bot) return;
 
-  // Obtener el mensaje completo si está parcial
   if (reaction.partial) {
     try {
       await reaction.fetch();
@@ -149,7 +152,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
     }
   }
 
-  // Verificar que el mensaje tenga el embed correcto
   const message = reaction.message;
   if (!message.embeds || message.embeds.length === 0) return;
   if (message.embeds[0].title !== '🎯 Sistema de Roles de Reunión') return;
@@ -160,7 +162,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
   const member = await guild.members.fetch(user.id);
   if (!member) return;
 
-  let roleName = null;
+  let roleName: string | null = null;
 
   if (reaction.emoji.name === '👔') {
     roleName = 'JEFE DE REUNION';
@@ -185,10 +187,8 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
 // Manejar reacciones cuando se quitan
 client.on('messageReactionRemove', async (reaction, user) => {
-  // Evitar procesar reacciones del bot
   if (user.bot) return;
 
-  // Obtener el mensaje completo si está parcial
   if (reaction.partial) {
     try {
       await reaction.fetch();
@@ -198,7 +198,6 @@ client.on('messageReactionRemove', async (reaction, user) => {
     }
   }
 
-  // Verificar que el mensaje tenga el embed correcto
   const message = reaction.message;
   if (!message.embeds || message.embeds.length === 0) return;
   if (message.embeds[0].title !== '🎯 Sistema de Roles de Reunión') return;
@@ -209,7 +208,7 @@ client.on('messageReactionRemove', async (reaction, user) => {
   const member = await guild.members.fetch(user.id);
   if (!member) return;
 
-  let roleName = null;
+  let roleName: string | null = null;
 
   if (reaction.emoji.name === '👔') {
     roleName = 'JEFE DE REUNION';
@@ -232,7 +231,7 @@ client.on('messageReactionRemove', async (reaction, user) => {
 
 // Registrar comandos cuando el bot se conecta
 client.once('ready', async () => {
-  console.log(`Bot conectado como ${client.user.tag}`);
+  console.log(`Bot conectado como ${client.user?.tag}`);
 
   try {
     console.log('Registrando comandos...');
@@ -251,9 +250,8 @@ client.once('ready', async () => {
       },
     ];
 
-    // Registrar comandos globalmente
     await rest.put(
-      Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
+      Routes.applicationCommands(Deno.env.get('DISCORD_CLIENT_ID') || ''),
       { body: commands }
     );
 
@@ -263,8 +261,8 @@ client.once('ready', async () => {
   }
 });
 
-// Endpoint de salud para cron-job.org (mantener el bot activo)
-app.get('/', (req, res) => {
+// Endpoint de salud para cron-job.org
+app.get('/', (req: any, res: any) => {
   res.json({ 
     status: 'ok', 
     bot: client.user ? 'connected' : 'disconnected',
@@ -273,10 +271,10 @@ app.get('/', (req, res) => {
 });
 
 // Iniciar servidor
-app.listen(PORT, () => {
+app.listen(parseInt(PORT), () => {
   console.log(`Servidor escuchando en puerto ${PORT}`);
 });
 
 // Conectar bot
-client.login(process.env.DISCORD_TOKEN);
+client.login(Deno.env.get('DISCORD_TOKEN'));
 
