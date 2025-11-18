@@ -20,7 +20,7 @@ const rest = new REST({ version: '10' }).setToken(Deno.env.get('DISCORD_TOKEN') 
 // Middleware para verificar la firma de Discord
 app.use(express.raw({ type: 'application/json' }));
 
-// Verificar firma de Discord (Ed25519)
+// Verificar firma de Discord
 function verifySignature(req: any, res: any, next: any) {
   const signature = req.get('X-Signature-Ed25519');
   const timestamp = req.get('X-Signature-Timestamp');
@@ -143,6 +143,8 @@ app.post('/interactions', verifySignature, async (req: any, res: any) => {
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
 
+  console.log(`Reacción agregada: ${reaction.emoji.name} por ${user.tag}`);
+
   if (reaction.partial) {
     try {
       await reaction.fetch();
@@ -153,35 +155,66 @@ client.on('messageReactionAdd', async (reaction, user) => {
   }
 
   const message = reaction.message;
-  if (!message.embeds || message.embeds.length === 0) return;
-  if (message.embeds[0].title !== '🎯 Sistema de Roles de Reunión') return;
-
-  const guild = message.guild;
-  if (!guild) return;
-
-  const member = await guild.members.fetch(user.id);
-  if (!member) return;
-
-  let roleName: string | null = null;
-
-  if (reaction.emoji.name === '👔') {
-    roleName = 'JEFE DE REUNION';
-  } else if (reaction.emoji.name === '🙋‍♂️') {
-    roleName = 'PARTICIPANTE DE REUNION';
+  if (!message.embeds || message.embeds.length === 0) {
+    console.log('Mensaje sin embeds, ignorando');
+    return;
   }
 
-  if (roleName) {
-    const role = guild.roles.cache.find(r => r.name === roleName);
-    if (role) {
-      try {
-        await member.roles.add(role);
-        console.log(`Rol ${roleName} asignado a ${user.tag}`);
-      } catch (error) {
-        console.error(`Error asignando rol ${roleName}:`, error);
-      }
-    } else {
-      console.log(`Rol ${roleName} no encontrado en el servidor`);
+  const embedTitle = message.embeds[0].title;
+  console.log(`Título del embed: ${embedTitle}`);
+  
+  if (embedTitle !== '🎯 Sistema de Roles de Reunión') {
+    console.log('Embed no es del sistema de roles, ignorando');
+    return;
+  }
+
+  const guild = message.guild;
+  if (!guild) {
+    console.log('No hay guild, ignorando');
+    return;
+  }
+
+  try {
+    const member = await guild.members.fetch(user.id);
+    if (!member) {
+      console.log('Miembro no encontrado');
+      return;
     }
+
+    let roleName: string | null = null;
+
+    if (reaction.emoji.name === '👔') {
+      roleName = 'JEFE DE REUNION';
+    } else if (reaction.emoji.name === '🙋‍♂️') {
+      roleName = 'PARTICIPANTE DE REUNION';
+    }
+
+    if (!roleName) {
+      console.log(`Emoji ${reaction.emoji.name} no corresponde a ningún rol`);
+      return;
+    }
+
+    console.log(`Buscando rol: ${roleName}`);
+    const role = guild.roles.cache.find(r => r.name === roleName);
+    
+    if (!role) {
+      console.log(`❌ Rol "${roleName}" no encontrado en el servidor`);
+      console.log(`Roles disponibles: ${guild.roles.cache.map(r => r.name).join(', ')}`);
+      return;
+    }
+
+    console.log(`✅ Rol encontrado: ${role.name} (ID: ${role.id})`);
+    console.log(`Intentando asignar rol a ${member.user.tag}...`);
+
+    try {
+      await member.roles.add(role);
+      console.log(`✅ Rol ${roleName} asignado exitosamente a ${user.tag}`);
+    } catch (error: any) {
+      console.error(`❌ Error asignando rol ${roleName}:`, error.message);
+      console.error('Detalles del error:', error);
+    }
+  } catch (error: any) {
+    console.error('Error procesando reacción:', error.message);
   }
 });
 
