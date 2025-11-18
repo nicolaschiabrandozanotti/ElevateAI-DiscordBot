@@ -53,9 +53,9 @@ Asegúrate de crear estos roles en tu servidor de Discord:
 ### 5. Configurar Interactions Endpoint URL
 
 1. En Discord Developer Portal, ve a "General Information"
-2. En "Interactions Endpoint URL", ingresa tu URL de Railway:
+2. En "Interactions Endpoint URL", ingresa tu URL de Deno Deploy:
    ```
-   https://tu-app.railway.app/interactions
+   https://tu-proyecto.deno.dev/interactions
    ```
 3. Guarda los cambios
 
@@ -74,31 +74,33 @@ PORT=3000
 
 ## Instalación Local
 
+Este bot está construido con **Deno**. Para ejecutarlo localmente:
+
 ```bash
-npm install
-npm start
+deno task start
+```
+
+O con permisos explícitos:
+
+```bash
+deno run --allow-net --allow-env --allow-read index.ts
 ```
 
 ## Deployment
 
-### Opción 1: Railway (Recomendado para producción)
+### Deno Deploy (Recomendado)
 
-Consulta la guía completa: **[RAILWAY_DEPLOY.md](./RAILWAY_DEPLOY.md)**
+Consulta la guía completa: **[DENO_DEPLOY.md](./DENO_DEPLOY.md)**
 
-1. Conecta tu repositorio a Railway
-2. Railway detectará automáticamente el `package.json`
-3. Agrega las variables de entorno en Railway
-4. Obtén la URL pública y configura el Interactions Endpoint URL
-
-### Opción 2: Replit + cron-job.org (Gratis)
-
-Consulta la guía completa: **[REPLIT_DEPLOY.md](./REPLIT_DEPLOY.md)**
-
-1. Importa el repositorio en Replit desde GitHub
-2. Configura las variables de entorno en Replit (Secrets)
-3. Obtén la URL pública de Replit
-4. Configura cron-job.org para mantener el bot activo (ping cada 5 minutos)
-5. Configura el Interactions Endpoint URL en Discord
+1. Ve a https://deno.com/deploy
+2. Conecta tu repositorio de GitHub
+3. Configura las variables de entorno:
+   - `DISCORD_TOKEN`
+   - `DISCORD_CLIENT_ID`
+   - `DISCORD_PUBLIC_KEY`
+4. Obtén la URL pública (ej: `https://tu-proyecto.deno.dev`)
+5. Configura el Interactions Endpoint URL en Discord: `https://tu-proyecto.deno.dev/interactions`
+6. (Opcional) Configura cron-job.org para mantener el bot activo: `https://tu-proyecto.deno.dev/`
 
 ## Uso
 
