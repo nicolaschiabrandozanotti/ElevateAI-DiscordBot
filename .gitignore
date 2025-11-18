@@ -5,3 +5,9 @@ node_modules/
 dist/
 build/
 
+# Excluir archivos de documentación (excepto README.md)
+GUIA_ENDPOINT.md
+RAILWAY_DEPLOY.md
+REPLIT_DEPLOY.md
+SETUP.md
+

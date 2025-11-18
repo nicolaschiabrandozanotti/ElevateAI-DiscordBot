@@ -263,6 +263,15 @@ client.once('ready', async () => {
   }
 });
 
+// Endpoint de salud para cron-job.org (mantener el bot activo)
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    bot: client.user ? 'connected' : 'disconnected',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`Servidor escuchando en puerto ${PORT}`);

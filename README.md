@@ -79,16 +79,26 @@ npm install
 npm start
 ```
 
-## Deployment en Railway
+## Deployment
+
+### Opción 1: Railway (Recomendado para producción)
+
+Consulta la guía completa: **[RAILWAY_DEPLOY.md](./RAILWAY_DEPLOY.md)**
 
 1. Conecta tu repositorio a Railway
 2. Railway detectará automáticamente el `package.json`
-3. Agrega las variables de entorno en Railway:
-   - `DISCORD_TOKEN`
-   - `DISCORD_CLIENT_ID`
-   - `DISCORD_PUBLIC_KEY`
-4. Railway asignará automáticamente el `PORT`
-5. Una vez desplegado, actualiza la Interactions Endpoint URL en Discord Developer Portal con la URL de Railway
+3. Agrega las variables de entorno en Railway
+4. Obtén la URL pública y configura el Interactions Endpoint URL
+
+### Opción 2: Replit + cron-job.org (Gratis)
+
+Consulta la guía completa: **[REPLIT_DEPLOY.md](./REPLIT_DEPLOY.md)**
+
+1. Importa el repositorio en Replit desde GitHub
+2. Configura las variables de entorno en Replit (Secrets)
+3. Obtén la URL pública de Replit
+4. Configura cron-job.org para mantener el bot activo (ping cada 5 minutos)
+5. Configura el Interactions Endpoint URL en Discord
 
 ## Uso
 
