@@ -139,68 +139,41 @@ app.post('/interactions', verifySignature, async (req: any, res: any) => {
   }
 });
 
-// Manejar reacciones cuando se agregan
-client.on('messageReactionAdd', async (reaction, user) => {
-  if (user.bot) return;
-
-  console.log(`Reacción agregada: ${reaction.emoji.name} por ${user.tag}`);
-
-  // Fetch de la reacción si está parcial
-  if (reaction.partial) {
-    try {
-      await reaction.fetch();
-    } catch (error) {
-      console.error('Error obteniendo reacción:', error);
+// Función auxiliar para procesar reacciones
+async function processReaction(messageId: string, channelId: string, userId: string, emojiName: string | null, isAdd: boolean) {
+  try {
+    // Obtener el canal
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased()) {
+      console.log('Canal no encontrado o no es de texto');
       return;
     }
-  }
 
-  // SIEMPRE hacer fetch del mensaje completo para asegurar que tenemos todos los datos
-  // Esto es especialmente importante después de una reconexión del bot
-  let message = reaction.message;
-  try {
-    // Si el mensaje está parcial, hacer fetch
-    if (message.partial) {
-      message = await message.fetch();
-      console.log('Mensaje obtenido desde API (estaba parcial)');
-    } 
-    // Si el mensaje no tiene embeds o parece incompleto, hacer fetch de todos modos
-    else if (!message.embeds || message.embeds.length === 0 || !message.guild) {
-      message = await message.fetch();
-      console.log('Mensaje refrescado desde API (datos incompletos)');
+    // Obtener el mensaje completo desde la API
+    const message = await channel.messages.fetch(messageId);
+    
+    if (!message.embeds || message.embeds.length === 0) {
+      console.log('Mensaje sin embeds, ignorando');
+      return;
     }
-    // Incluso si parece completo, hacer fetch para asegurar que tenemos los datos más recientes
-    // Esto previene problemas después de reconexiones
-    else {
-      message = await message.fetch();
-      console.log('Mensaje refrescado desde API (verificación post-reconexión)');
+
+    const embedTitle = message.embeds[0].title;
+    if (embedTitle !== '🎯 Sistema de Roles de Reunión') {
+      console.log('Embed no es del sistema de roles, ignorando');
+      return;
     }
-  } catch (error) {
-    console.error('Error obteniendo/refrescando mensaje:', error);
-    return;
-  }
 
-  if (!message.embeds || message.embeds.length === 0) {
-    console.log('Mensaje sin embeds después de fetch, ignorando');
-    return;
-  }
+    const guild = message.guild;
+    if (!guild) {
+      console.log('No hay guild, ignorando');
+      return;
+    }
 
-  const embedTitle = message.embeds[0].title;
-  console.log(`Título del embed: ${embedTitle}`);
-  
-  if (embedTitle !== '🎯 Sistema de Roles de Reunión') {
-    console.log('Embed no es del sistema de roles, ignorando');
-    return;
-  }
+    // Obtener el usuario y miembro
+    const user = await client.users.fetch(userId);
+    if (user.bot) return;
 
-  const guild = message.guild;
-  if (!guild) {
-    console.log('No hay guild, ignorando');
-    return;
-  }
-
-  try {
-    const member = await guild.members.fetch(user.id);
+    const member = await guild.members.fetch(userId);
     if (!member) {
       console.log('Miembro no encontrado');
       return;
@@ -208,99 +181,74 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
     let roleName: string | null = null;
 
-    if (reaction.emoji.name === '👔') {
+    if (emojiName === '👔') {
       roleName = 'JEFE DE REUNION';
-    } else if (reaction.emoji.name === '🙋‍♂️') {
+    } else if (emojiName === '🙋‍♂️') {
       roleName = 'PARTICIPANTE DE REUNION';
     }
 
     if (!roleName) {
-      console.log(`Emoji ${reaction.emoji.name} no corresponde a ningún rol`);
+      console.log(`Emoji ${emojiName} no corresponde a ningún rol`);
       return;
     }
 
-    console.log(`Buscando rol: ${roleName}`);
+    console.log(`${isAdd ? 'Agregando' : 'Removiendo'} rol: ${roleName} para ${user.tag}`);
+
     const role = guild.roles.cache.find(r => r.name === roleName);
-    
     if (!role) {
       console.log(`❌ Rol "${roleName}" no encontrado en el servidor`);
-      console.log(`Roles disponibles: ${guild.roles.cache.map(r => r.name).join(', ')}`);
       return;
     }
 
-    console.log(`✅ Rol encontrado: ${role.name} (ID: ${role.id})`);
-    console.log(`Intentando asignar rol a ${member.user.tag}...`);
-
     try {
-      await member.roles.add(role);
-      console.log(`✅ Rol ${roleName} asignado exitosamente a ${user.tag}`);
+      if (isAdd) {
+        await member.roles.add(role);
+        console.log(`✅ Rol ${roleName} asignado exitosamente a ${user.tag}`);
+      } else {
+        await member.roles.remove(role);
+        console.log(`✅ Rol ${roleName} removido exitosamente de ${user.tag}`);
+      }
     } catch (error: any) {
-      console.error(`❌ Error asignando rol ${roleName}:`, error.message);
-      console.error('Detalles del error:', error);
+      console.error(`❌ Error ${isAdd ? 'asignando' : 'removiendo'} rol ${roleName}:`, error.message);
     }
   } catch (error: any) {
     console.error('Error procesando reacción:', error.message);
   }
+}
+
+// Usar eventos RAW para capturar TODAS las reacciones, incluso en mensajes no cacheados
+client.on('raw', async (packet: any) => {
+  // Escuchar eventos de reacciones agregadas
+  if (packet.t === 'MESSAGE_REACTION_ADD') {
+    const { message_id, channel_id, user_id, emoji } = packet.d;
+    const emojiName = emoji.name || (emoji.id ? `<:${emoji.name}:${emoji.id}>` : null);
+    
+    console.log(`[RAW] Reacción agregada: ${emojiName} por usuario ${user_id} en mensaje ${message_id}`);
+    await processReaction(message_id, channel_id, user_id, emojiName, true);
+  }
+  
+  // Escuchar eventos de reacciones removidas
+  if (packet.t === 'MESSAGE_REACTION_REMOVE') {
+    const { message_id, channel_id, user_id, emoji } = packet.d;
+    const emojiName = emoji.name || (emoji.id ? `<:${emoji.name}:${emoji.id}>` : null);
+    
+    console.log(`[RAW] Reacción removida: ${emojiName} por usuario ${user_id} en mensaje ${message_id}`);
+    await processReaction(message_id, channel_id, user_id, emojiName, false);
+  }
 });
 
-// Manejar reacciones cuando se quitan
+// También mantener el listener normal por si acaso
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user.bot) return;
+  // El evento raw ya maneja esto, pero lo dejamos como backup
+  console.log(`[NORMAL] Reacción agregada: ${reaction.emoji.name} por ${user.tag}`);
+});
+
+// También mantener el listener normal por si acaso
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
-
-  // Fetch de la reacción si está parcial
-  if (reaction.partial) {
-    try {
-      await reaction.fetch();
-    } catch (error) {
-      console.error('Error obteniendo reacción:', error);
-      return;
-    }
-  }
-
-  // SIEMPRE hacer fetch del mensaje completo para asegurar que tenemos todos los datos
-  let message = reaction.message;
-  try {
-    if (message.partial) {
-      message = await message.fetch();
-    } else if (!message.embeds || message.embeds.length === 0 || !message.guild) {
-      message = await message.fetch();
-    } else {
-      // Hacer fetch de todos modos para asegurar datos actualizados
-      message = await message.fetch();
-    }
-  } catch (error) {
-    console.error('Error obteniendo/refrescando mensaje:', error);
-    return;
-  }
-
-  if (!message.embeds || message.embeds.length === 0) return;
-  if (message.embeds[0].title !== '🎯 Sistema de Roles de Reunión') return;
-
-  const guild = message.guild;
-  if (!guild) return;
-
-  const member = await guild.members.fetch(user.id);
-  if (!member) return;
-
-  let roleName: string | null = null;
-
-  if (reaction.emoji.name === '👔') {
-    roleName = 'JEFE DE REUNION';
-  } else if (reaction.emoji.name === '🙋‍♂️') {
-    roleName = 'PARTICIPANTE DE REUNION';
-  }
-
-  if (roleName) {
-    const role = guild.roles.cache.find(r => r.name === roleName);
-    if (role) {
-      try {
-        await member.roles.remove(role);
-        console.log(`Rol ${roleName} removido de ${user.tag}`);
-      } catch (error) {
-        console.error(`Error removiendo rol ${roleName}:`, error);
-      }
-    }
-  }
+  // El evento raw ya maneja esto, pero lo dejamos como backup
+  console.log(`[NORMAL] Reacción removida: ${reaction.emoji.name} por ${user.tag}`);
 });
 
 // Registrar comandos cuando el bot se conecta
