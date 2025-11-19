@@ -535,6 +535,36 @@ app.get('/', (req: any, res: any) => {
   });
 });
 
+// Endpoint para verificar comandos registrados
+app.get('/commands', async (req: any, res: any) => {
+  try {
+    const clientId = Deno.env.get('DISCORD_CLIENT_ID');
+    if (!clientId) {
+      return res.status(500).json({ error: 'DISCORD_CLIENT_ID no configurado' });
+    }
+
+    const commands = await rest.get(
+      Routes.applicationCommands(clientId)
+    ) as any[];
+
+    res.json({ 
+      success: true, 
+      count: commands.length,
+      commands: commands.map((cmd: any) => ({
+        name: cmd.name,
+        description: cmd.description,
+        options: cmd.options?.length || 0
+      }))
+    });
+  } catch (error: any) {
+    console.error('Error obteniendo comandos:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para forzar el registro de comandos
 app.post('/register-commands', async (req: any, res: any) => {
   try {
