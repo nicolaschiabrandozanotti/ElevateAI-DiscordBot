@@ -661,6 +661,8 @@ client.once('ready', async () => {
     }
 
     console.log(`Registrando ${commands.length} comandos...`);
+    console.log('Comandos a registrar:', commands.map((c: any) => c.name).join(', '));
+    
     const data = await rest.put(
       Routes.applicationCommands(clientId),
       { body: commands }
