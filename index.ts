@@ -565,7 +565,118 @@ app.get('/commands', async (req: any, res: any) => {
   }
 });
 
-// Endpoint para forzar el registro de comandos
+// Endpoint para forzar el registro de comandos (GET y POST)
+app.get('/register-commands', async (req: any, res: any) => {
+  try {
+    const clientId = Deno.env.get('DISCORD_CLIENT_ID');
+    if (!clientId) {
+      return res.status(500).json({ error: 'DISCORD_CLIENT_ID no configurado' });
+    }
+
+    const commands = [
+      {
+        name: 'ai',
+        description: 'Comandos de IA',
+        options: [
+          {
+            name: 'rol_create',
+            description: 'Crea un mensaje con sistema de roles por reacciones',
+            type: 1, // SUB_COMMAND
+          },
+        ],
+      },
+      {
+        name: 'wsp',
+        description: 'Envía un mensaje de WhatsApp',
+        options: [
+          {
+            name: 'numero_propio',
+            description: 'Tu número de WhatsApp (formato: +5491111111111)',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'numero_contacto',
+            description: 'Número del contacto a quien enviar (formato: +5491111111111)',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mensaje',
+            description: 'Mensaje a enviar',
+            type: 3, // STRING
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'email',
+        description: 'Envía un email',
+        options: [
+          {
+            name: 'mail_propio',
+            description: 'Tu dirección de email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mail_contacto',
+            description: 'Email del destinatario',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'asunto',
+            description: 'Asunto del email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mensaje',
+            description: 'Mensaje del email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'smtp_password',
+            description: 'Contraseña SMTP (opcional, usa SMTP_PASSWORD de variables de entorno si no se proporciona)',
+            type: 3, // STRING
+            required: false,
+          },
+        ],
+      },
+    ];
+
+    console.log('🔄 Forzando registro de comandos...');
+    const data = await rest.put(
+      Routes.applicationCommands(clientId),
+      { body: commands }
+    ) as any[];
+
+    console.log(`✅ ${data.length} comandos re-registrados exitosamente`);
+    const response = {
+      success: true,
+      message: `${data.length} comandos re-registrados exitosamente`,
+      commands: data.map((cmd: any) => ({
+        name: cmd.name,
+        description: cmd.description,
+        id: cmd.id
+      })),
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(response);
+  } catch (error: any) {
+    console.error('❌ Error registrando comandos:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      details: error.rawError || null
+    });
+  }
+});
+
+// Endpoint para forzar el registro de comandos (POST)
 app.post('/register-commands', async (req: any, res: any) => {
   try {
     const clientId = Deno.env.get('DISCORD_CLIENT_ID');
@@ -647,15 +758,22 @@ app.post('/register-commands', async (req: any, res: any) => {
       },
     ];
 
+    console.log('🔄 Forzando registro de comandos (POST)...');
     const data = await rest.put(
       Routes.applicationCommands(clientId),
       { body: commands }
     ) as any[];
 
+    console.log(`✅ ${data.length} comandos re-registrados exitosamente`);
     res.json({ 
       success: true, 
-      message: `${data.length} comandos registrados exitosamente`,
-      commands: data.map((cmd: any) => cmd.name)
+      message: `${data.length} comandos re-registrados exitosamente`,
+      commands: data.map((cmd: any) => ({
+        name: cmd.name,
+        description: cmd.description,
+        id: cmd.id
+      })),
+      timestamp: new Date().toISOString()
     });
   } catch (error: any) {
     console.error('Error registrando comandos:', error);
