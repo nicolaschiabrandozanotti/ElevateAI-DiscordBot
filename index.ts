@@ -1,6 +1,8 @@
 import express from 'express';
 import { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } from 'discord.js';
 import nacl from 'tweetnacl';
+import twilio from 'twilio';
+import nodemailer from 'nodemailer';
 
 const app = express();
 const PORT = Deno.env.get('PORT') || '3000';
@@ -65,6 +67,78 @@ function hexToUint8Array(hex: string): Uint8Array {
     bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
   }
   return bytes;
+}
+
+// Función para enviar mensaje de WhatsApp usando Twilio
+async function enviarWhatsApp(numeroPropio: string, numeroContacto: string, mensaje: string) {
+  try {
+    const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID');
+    const authToken = Deno.env.get('TWILIO_AUTH_TOKEN');
+    const twilioWhatsAppNumber = Deno.env.get('TWILIO_WHATSAPP_NUMBER'); // Formato: whatsapp:+14155238886
+
+    if (!accountSid || !authToken || !twilioWhatsAppNumber) {
+      throw new Error('Configuración de Twilio incompleta. Necesitas TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_WHATSAPP_NUMBER');
+    }
+
+    const client = twilio(accountSid, authToken);
+    
+    // Formatear número de destino con código de país (whatsapp:+5491111111111)
+    const toNumber = numeroContacto.startsWith('whatsapp:') 
+      ? numeroContacto 
+      : (numeroContacto.startsWith('+') ? `whatsapp:${numeroContacto}` : `whatsapp:+${numeroContacto}`);
+
+    // Incluir información del remitente en el mensaje
+    const mensajeCompleto = `De: ${numeroPropio}\n\n${mensaje}`;
+
+    const message = await client.messages.create({
+      from: twilioWhatsAppNumber, // Número de Twilio configurado (requerido por Twilio)
+      to: toNumber,
+      body: mensajeCompleto
+    });
+
+    return { success: true, messageId: message.sid, message: 'Mensaje de WhatsApp enviado exitosamente' };
+  } catch (error: any) {
+    console.error('Error enviando WhatsApp:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Función para enviar email usando nodemailer
+async function enviarEmail(mailPropio: string, mailContacto: string, asunto: string, mensaje: string, smtpPasswordParam?: string) {
+  try {
+    const smtpHost = Deno.env.get('SMTP_HOST') || 'smtp.gmail.com';
+    const smtpPort = parseInt(Deno.env.get('SMTP_PORT') || '587');
+    const smtpUser = Deno.env.get('SMTP_USER') || mailPropio;
+    // Usar la contraseña del parámetro si se proporciona, sino usar la de las variables de entorno
+    const smtpPassword = smtpPasswordParam || Deno.env.get('SMTP_PASSWORD');
+
+    if (!smtpPassword) {
+      throw new Error('SMTP_PASSWORD no configurado. Proporciona la contraseña en el comando o configura SMTP_PASSWORD en las variables de entorno.');
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465, // true para 465, false para otros puertos
+      auth: {
+        user: smtpUser,
+        pass: smtpPassword,
+      },
+    });
+
+    const info = await transporter.sendMail({
+      from: `"${mailPropio}" <${mailPropio}>`,
+      to: mailContacto,
+      subject: asunto,
+      text: mensaje,
+      html: `<p>${mensaje.replace(/\n/g, '<br>')}</p>`,
+    });
+
+    return { success: true, messageId: info.messageId, message: 'Email enviado exitosamente' };
+  } catch (error: any) {
+    console.error('Error enviando email:', error);
+    return { success: false, error: error.message };
+  }
 }
 
 // Endpoint para interactions
@@ -135,6 +209,102 @@ app.post('/interactions', verifySignature, async (req: any, res: any) => {
           }
         }, 2000);
       }
+    }
+
+    // Comando /wsp para enviar mensajes de WhatsApp
+    if (interaction.data.name === 'wsp') {
+      const options = interaction.data.options || [];
+      const numeroPropio = options.find((opt: any) => opt.name === 'numero_propio')?.value;
+      const numeroContacto = options.find((opt: any) => opt.name === 'numero_contacto')?.value;
+      const mensaje = options.find((opt: any) => opt.name === 'mensaje')?.value;
+
+      if (!numeroPropio || !numeroContacto || !mensaje) {
+        return res.json({
+          type: 4,
+          data: {
+            content: '❌ Error: Faltan parámetros. Usa: `/wsp numero_propio:... numero_contacto:... mensaje:...`',
+            flags: 64, // EPHEMERAL
+          },
+        });
+      }
+
+      // Responder inmediatamente (Discord requiere respuesta en 3 segundos)
+      res.json({
+        type: 4,
+        data: {
+          content: '📱 Enviando mensaje de WhatsApp...',
+          flags: 64, // EPHEMERAL
+        },
+      });
+
+      // Enviar el mensaje de forma asíncrona
+      const resultado = await enviarWhatsApp(numeroPropio, numeroContacto, mensaje);
+
+      // Editar la respuesta con el resultado
+      try {
+        const followupUrl = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
+        await fetch(followupUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: resultado.success
+              ? `✅ ${resultado.message}\n📱 ID: ${resultado.messageId}`
+              : `❌ Error: ${resultado.error}`,
+          }),
+        });
+      } catch (error) {
+        console.error('Error actualizando mensaje:', error);
+      }
+      return;
+    }
+
+    // Comando /email para enviar emails
+    if (interaction.data.name === 'email') {
+      const options = interaction.data.options || [];
+      const mailPropio = options.find((opt: any) => opt.name === 'mail_propio')?.value;
+      const mailContacto = options.find((opt: any) => opt.name === 'mail_contacto')?.value;
+      const asunto = options.find((opt: any) => opt.name === 'asunto')?.value;
+      const mensaje = options.find((opt: any) => opt.name === 'mensaje')?.value;
+      const smtpPassword = options.find((opt: any) => opt.name === 'smtp_password')?.value;
+
+      if (!mailPropio || !mailContacto || !asunto || !mensaje) {
+        return res.json({
+          type: 4,
+          data: {
+            content: '❌ Error: Faltan parámetros. Usa: `/email mail_propio:... mail_contacto:... asunto:... mensaje:... [smtp_password:...]`',
+            flags: 64, // EPHEMERAL
+          },
+        });
+      }
+
+      // Responder inmediatamente (Discord requiere respuesta en 3 segundos)
+      res.json({
+        type: 4,
+        data: {
+          content: '📧 Enviando email...',
+          flags: 64, // EPHEMERAL
+        },
+      });
+
+      // Enviar el email de forma asíncrona
+      const resultado = await enviarEmail(mailPropio, mailContacto, asunto, mensaje, smtpPassword);
+
+      // Editar la respuesta con el resultado
+      try {
+        const followupUrl = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
+        await fetch(followupUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: resultado.success
+              ? `✅ ${resultado.message}\n📧 ID: ${resultado.messageId}`
+              : `❌ Error: ${resultado.error}`,
+          }),
+        });
+      } catch (error) {
+        console.error('Error actualizando mensaje:', error);
+      }
+      return;
     }
   }
 });
@@ -270,16 +440,89 @@ client.once('ready', async () => {
           },
         ],
       },
+      {
+        name: 'wsp',
+        description: 'Envía un mensaje de WhatsApp',
+        options: [
+          {
+            name: 'numero_propio',
+            description: 'Tu número de WhatsApp (formato: +5491111111111)',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'numero_contacto',
+            description: 'Número del contacto a quien enviar (formato: +5491111111111)',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mensaje',
+            description: 'Mensaje a enviar',
+            type: 3, // STRING
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'email',
+        description: 'Envía un email',
+        options: [
+          {
+            name: 'mail_propio',
+            description: 'Tu dirección de email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mail_contacto',
+            description: 'Email del destinatario',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'asunto',
+            description: 'Asunto del email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mensaje',
+            description: 'Mensaje del email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'smtp_password',
+            description: 'Contraseña SMTP (opcional, usa SMTP_PASSWORD de variables de entorno si no se proporciona)',
+            type: 3, // STRING
+            required: false,
+          },
+        ],
+      },
     ];
 
-    await rest.put(
-      Routes.applicationCommands(Deno.env.get('DISCORD_CLIENT_ID') || ''),
-      { body: commands }
-    );
+    const clientId = Deno.env.get('DISCORD_CLIENT_ID');
+    if (!clientId) {
+      console.error('❌ DISCORD_CLIENT_ID no configurado');
+      return;
+    }
 
-    console.log('Comandos registrados exitosamente');
-  } catch (error) {
-    console.error('Error registrando comandos:', error);
+    console.log(`Registrando ${commands.length} comandos...`);
+    const data = await rest.put(
+      Routes.applicationCommands(clientId),
+      { body: commands }
+    ) as any[];
+
+    console.log(`✅ ${data.length} comandos registrados exitosamente:`);
+    data.forEach((cmd: any) => {
+      console.log(`   - /${cmd.name}`);
+    });
+  } catch (error: any) {
+    console.error('❌ Error registrando comandos:', error.message);
+    if (error.rawError) {
+      console.error('Detalles:', JSON.stringify(error.rawError, null, 2));
+    }
   }
 });
 
@@ -290,6 +533,108 @@ app.get('/', (req: any, res: any) => {
     bot: client.user ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
   });
+});
+
+// Endpoint para forzar el registro de comandos
+app.post('/register-commands', async (req: any, res: any) => {
+  try {
+    const clientId = Deno.env.get('DISCORD_CLIENT_ID');
+    if (!clientId) {
+      return res.status(500).json({ error: 'DISCORD_CLIENT_ID no configurado' });
+    }
+
+    const commands = [
+      {
+        name: 'ai',
+        description: 'Comandos de IA',
+        options: [
+          {
+            name: 'rol_create',
+            description: 'Crea un mensaje con sistema de roles por reacciones',
+            type: 1, // SUB_COMMAND
+          },
+        ],
+      },
+      {
+        name: 'wsp',
+        description: 'Envía un mensaje de WhatsApp',
+        options: [
+          {
+            name: 'numero_propio',
+            description: 'Tu número de WhatsApp (formato: +5491111111111)',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'numero_contacto',
+            description: 'Número del contacto a quien enviar (formato: +5491111111111)',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mensaje',
+            description: 'Mensaje a enviar',
+            type: 3, // STRING
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'email',
+        description: 'Envía un email',
+        options: [
+          {
+            name: 'mail_propio',
+            description: 'Tu dirección de email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mail_contacto',
+            description: 'Email del destinatario',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'asunto',
+            description: 'Asunto del email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'mensaje',
+            description: 'Mensaje del email',
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: 'smtp_password',
+            description: 'Contraseña SMTP (opcional, usa SMTP_PASSWORD de variables de entorno si no se proporciona)',
+            type: 3, // STRING
+            required: false,
+          },
+        ],
+      },
+    ];
+
+    const data = await rest.put(
+      Routes.applicationCommands(clientId),
+      { body: commands }
+    ) as any[];
+
+    res.json({ 
+      success: true, 
+      message: `${data.length} comandos registrados exitosamente`,
+      commands: data.map((cmd: any) => cmd.name)
+    });
+  } catch (error: any) {
+    console.error('Error registrando comandos:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      details: error.rawError || null
+    });
+  }
 });
 
 // Iniciar servidor

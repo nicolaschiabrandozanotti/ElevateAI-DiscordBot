@@ -7,7 +7,9 @@
     "discord.js": "npm:discord.js@^14.14.1",
     "express": "npm:express@^4.18.2",
     "dotenv": "npm:dotenv@^16.3.1",
-    "tweetnacl": "npm:tweetnacl@^1.0.3"
+    "tweetnacl": "npm:tweetnacl@^1.0.3",
+    "twilio": "npm:twilio@^4.19.0",
+    "nodemailer": "npm:nodemailer@^6.9.7"
   }
 }
 
