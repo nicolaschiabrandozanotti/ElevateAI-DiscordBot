@@ -6,6 +6,21 @@ import nodemailer from 'nodemailer';
 
 // Importaciones de WhatsApp (opcionales - solo si están disponibles)
 // Nota: Baileys puede no estar disponible en Deno Deploy, por lo que usamos enlaces wa.me como fallback
+let baileysModule: any = null;
+let boomModule: any = null;
+let qrcodeModule: any = null;
+
+// Intentar cargar módulos de WhatsApp (para uso local)
+// Nota: En Deno Deploy puede fallar, pero el código tiene fallback
+try {
+  baileysModule = await import('@whiskeysockets/baileys');
+  boomModule = await import('@hapi/boom');
+  qrcodeModule = await import('qrcode-terminal');
+  console.log('✅ Módulos de WhatsApp cargados correctamente - Envío automático disponible');
+} catch (error) {
+  console.warn('⚠️ Módulos de WhatsApp no disponibles. Se usará enlace wa.me como alternativa.');
+  console.warn('💡 Para envío automático, ejecuta el bot localmente con: deno task start');
+}
 
 const app = express();
 const PORT = Deno.env.get('PORT') || '3000';
@@ -77,32 +92,71 @@ function hexToUint8Array(hex: string): Uint8Array {
 }
 
 // Función para inicializar WhatsApp con Baileys
-async function inicializarWhatsApp() {
+async function inicializarWhatsApp(interactionInfo?: { applicationId: string; token: string; channelId?: string }) {
   try {
-    // Intentar cargar Baileys dinámicamente
-    const baileys = await import('@whiskeysockets/baileys');
+    // Usar módulos cargados o intentar cargarlos dinámicamente
+    let baileys = baileysModule;
+    let Boom = boomModule?.Boom;
+    let qrcodeTerminal = qrcodeModule?.default;
+    
+    if (!baileys) {
+      baileys = await import('@whiskeysockets/baileys');
+    }
+    if (!Boom) {
+      const boom = await import('@hapi/boom');
+      Boom = boom.Boom;
+    }
+    if (!qrcodeTerminal) {
+      qrcodeTerminal = (await import('qrcode-terminal')).default;
+    }
+    
     const { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, default: makeWASocket } = baileys;
-    const { Boom } = await import('@hapi/boom');
-    const qrcode = (await import('qrcode-terminal')).default;
 
     const { state, saveCreds } = await useMultiFileAuthState('whatsapp_auth');
     const { version } = await fetchLatestBaileysVersion();
     
     const socket = makeWASocket({
       version,
-      printQRInTerminal: true,
+      printQRInTerminal: false, // No imprimir en terminal, lo enviaremos a Discord
       auth: state,
       generateHighQualityLinkPreview: true,
     });
 
     socket.ev.on('creds.update', saveCreds);
 
-    socket.ev.on('connection.update', (update: any) => {
+    socket.ev.on('connection.update', async (update: any) => {
       const { connection, lastDisconnect, qr } = update;
       
-      if (qr) {
-        console.log('\n📱 Escanea este código QR con WhatsApp:');
-        qrcode.generate(qr, { small: true });
+      if (qr && interactionInfo) {
+        console.log('\n📱 Generando código QR para WhatsApp...');
+        qrcodeTerminal.generate(qr, { small: true });
+        
+        // Generar URL del QR usando API externa
+        const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
+        
+        // Enviar QR a Discord usando webhook
+        try {
+          const followupUrl = `https://discord.com/api/v10/webhooks/${interactionInfo.applicationId}/${interactionInfo.token}`;
+          
+          const embed = new EmbedBuilder()
+            .setTitle('📱 Escanea este código QR con WhatsApp')
+            .setDescription('1. Abre WhatsApp en tu teléfono\n2. Ve a **Configuración** → **Dispositivos vinculados**\n3. Toca **Vincular un dispositivo**\n4. Escanea este código QR')
+            .setColor(0x25D366)
+            .setImage(qrImageUrl)
+            .setTimestamp();
+          
+          await fetch(followupUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              embeds: [embed.toJSON()],
+            }),
+          });
+          
+          console.log('✅ QR enviado a Discord');
+        } catch (error: any) {
+          console.error('Error enviando QR a Discord:', error);
+        }
       }
       
       if (connection === 'close') {
@@ -389,25 +443,41 @@ app.post('/interactions', verifySignature, async (req: any, res: any) => {
       res.json({
         type: 4,
         data: {
-          content: '📱 Inicializando WhatsApp... Revisa la consola del servidor para ver el código QR.',
+          content: '📱 Inicializando WhatsApp... El código QR aparecerá aquí en un momento.',
           flags: 64, // EPHEMERAL
         },
       });
 
-      // Inicializar WhatsApp
+      // Inicializar WhatsApp con información de la interacción para enviar QR
       try {
-        await inicializarWhatsApp();
+        await inicializarWhatsApp({
+          applicationId: interaction.application_id,
+          token: interaction.token,
+          channelId: interaction.channel_id
+        });
         // Editar respuesta después de un momento
         setTimeout(async () => {
           try {
             const followupUrl = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
+            let mensaje = '';
+            
+            if (whatsappReady) {
+              mensaje = '✅ WhatsApp conectado exitosamente. Ya puedes usar `/wsp` para enviar mensajes automáticamente.';
+            } else {
+              // Verificar si es un error de dependencias no disponibles
+              mensaje = '⚠️ **Envío automático no disponible en este entorno**\n\n' +
+                       'El bot está usando **enlaces wa.me** como alternativa.\n\n' +
+                       '📱 **Cómo usar:**\n' +
+                       'Usa `/wsp numero_contacto:... mensaje:...` y recibirás un enlace que puedes abrir para enviar el mensaje.\n\n' +
+                       '💡 **Nota:** El envío automático requiere Baileys, que no está disponible en Deno Deploy. ' +
+                       'Para usar el envío automático, ejecuta el bot localmente con las dependencias instaladas.';
+            }
+            
             await fetch(followupUrl, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                content: whatsappReady
-                  ? '✅ WhatsApp conectado exitosamente. Ya puedes usar `/wsp` para enviar mensajes automáticamente.'
-                  : '📱 Revisa la consola del servidor y escanea el código QR con WhatsApp.\n\nUna vez conectado, podrás usar `/wsp` para enviar mensajes automáticamente.',
+                content: mensaje,
               }),
             });
           } catch (error) {
