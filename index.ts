@@ -116,15 +116,21 @@ async function enviarEmail(mailPropio: string, mailContacto: string, asunto: str
       throw new Error('SMTP_PASSWORD no configurado. Proporciona la contraseña en el comando o configura SMTP_PASSWORD en las variables de entorno.');
     }
 
+    // Limpiar espacios de la contraseña (Gmail las genera con espacios pero no los acepta)
+    const cleanPassword = smtpPassword.replace(/\s/g, '');
+
     const transporter = nodemailer.createTransport({
       host: smtpHost,
       port: smtpPort,
       secure: smtpPort === 465, // true para 465, false para otros puertos
       auth: {
         user: smtpUser,
-        pass: smtpPassword,
+        pass: cleanPassword,
       },
     });
+
+    // Verificar conexión antes de enviar
+    await transporter.verify();
 
     const info = await transporter.sendMail({
       from: `"${mailPropio}" <${mailPropio}>`,
@@ -137,7 +143,22 @@ async function enviarEmail(mailPropio: string, mailContacto: string, asunto: str
     return { success: true, messageId: info.messageId, message: 'Email enviado exitosamente' };
   } catch (error: any) {
     console.error('Error enviando email:', error);
-    return { success: false, error: error.message };
+    
+    // Mensajes de error más claros
+    let errorMessage = error.message;
+    
+    if (errorMessage.includes('535') || errorMessage.includes('BadCredentials') || errorMessage.includes('Username and Password not accepted')) {
+      errorMessage = '❌ Error de autenticación Gmail:\n' +
+        '1. Asegúrate de usar una CONTRASEÑA DE APLICACIÓN (no tu contraseña normal)\n' +
+        '2. Verifica que la verificación en 2 pasos esté habilitada\n' +
+        '3. Genera una nueva contraseña de aplicación en: https://myaccount.google.com/apppasswords\n' +
+        '4. La contraseña debe tener 16 caracteres (sin espacios)\n' +
+        '5. El email debe ser el mismo que usaste para generar la contraseña';
+    } else if (errorMessage.includes('EAUTH')) {
+      errorMessage = '❌ Error de autenticación. Verifica tu usuario y contraseña SMTP.';
+    }
+    
+    return { success: false, error: errorMessage };
   }
 }
 
