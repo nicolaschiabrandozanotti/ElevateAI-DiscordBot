@@ -69,36 +69,31 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
-// Función para enviar mensaje de WhatsApp usando Twilio
-async function enviarWhatsApp(numeroPropio: string, numeroContacto: string, mensaje: string) {
+// Función para generar enlace de WhatsApp (wa.me)
+function generarEnlaceWhatsApp(numeroContacto: string, mensaje: string) {
   try {
-    const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID');
-    const authToken = Deno.env.get('TWILIO_AUTH_TOKEN');
-    const twilioWhatsAppNumber = Deno.env.get('TWILIO_WHATSAPP_NUMBER'); // Formato: whatsapp:+14155238886
-
-    if (!accountSid || !authToken || !twilioWhatsAppNumber) {
-      throw new Error('Configuración de Twilio incompleta. Necesitas TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_WHATSAPP_NUMBER');
-    }
-
-    const client = twilio(accountSid, authToken);
+    // Limpiar y formatear el número (eliminar espacios, guiones, paréntesis, etc.)
+    let numeroLimpio = numeroContacto.replace(/[\s\-\(\)]/g, '');
     
-    // Formatear número de destino con código de país (whatsapp:+5491111111111)
-    const toNumber = numeroContacto.startsWith('whatsapp:') 
-      ? numeroContacto 
-      : (numeroContacto.startsWith('+') ? `whatsapp:${numeroContacto}` : `whatsapp:+${numeroContacto}`);
-
-    // Incluir información del remitente en el mensaje
-    const mensajeCompleto = `De: ${numeroPropio}\n\n${mensaje}`;
-
-    const message = await client.messages.create({
-      from: twilioWhatsAppNumber, // Número de Twilio configurado (requerido por Twilio)
-      to: toNumber,
-      body: mensajeCompleto
-    });
-
-    return { success: true, messageId: message.sid, message: 'Mensaje de WhatsApp enviado exitosamente' };
+    // Si no empieza con +, agregarlo
+    if (!numeroLimpio.startsWith('+')) {
+      numeroLimpio = '+' + numeroLimpio;
+    }
+    
+    // Codificar el mensaje para URL
+    const mensajeCodificado = encodeURIComponent(mensaje);
+    
+    // Generar enlace wa.me
+    const enlace = `https://wa.me/${numeroLimpio.replace('+', '')}?text=${mensajeCodificado}`;
+    
+    return { 
+      success: true, 
+      enlace: enlace,
+      numero: numeroLimpio,
+      mensaje: 'Enlace de WhatsApp generado exitosamente'
+    };
   } catch (error: any) {
-    console.error('Error enviando WhatsApp:', error);
+    console.error('Error generando enlace WhatsApp:', error);
     return { success: false, error: error.message };
   }
 }
@@ -232,51 +227,35 @@ app.post('/interactions', verifySignature, async (req: any, res: any) => {
       }
     }
 
-    // Comando /wsp para enviar mensajes de WhatsApp
+    // Comando /wsp para generar enlace de WhatsApp
     if (interaction.data.name === 'wsp') {
       const options = interaction.data.options || [];
-      const numeroPropio = options.find((opt: any) => opt.name === 'numero_propio')?.value;
       const numeroContacto = options.find((opt: any) => opt.name === 'numero_contacto')?.value;
       const mensaje = options.find((opt: any) => opt.name === 'mensaje')?.value;
 
-      if (!numeroPropio || !numeroContacto || !mensaje) {
+      if (!numeroContacto || !mensaje) {
         return res.json({
           type: 4,
           data: {
-            content: '❌ Error: Faltan parámetros. Usa: `/wsp numero_propio:... numero_contacto:... mensaje:...`',
+            content: '❌ Error: Faltan parámetros. Usa: `/wsp numero_contacto:... mensaje:...`',
             flags: 64, // EPHEMERAL
           },
         });
       }
 
-      // Responder inmediatamente (Discord requiere respuesta en 3 segundos)
-      res.json({
+      // Generar enlace de WhatsApp
+      const resultado = generarEnlaceWhatsApp(numeroContacto, mensaje);
+
+      // Responder con el enlace
+      return res.json({
         type: 4,
         data: {
-          content: '📱 Enviando mensaje de WhatsApp...',
+          content: resultado.success
+            ? `✅ ${resultado.mensaje}\n\n📱 **Enlace de WhatsApp:**\n${resultado.enlace}\n\n👆 Haz clic en el enlace para abrir WhatsApp con el mensaje prellenado.`
+            : `❌ Error: ${resultado.error}`,
           flags: 64, // EPHEMERAL
         },
       });
-
-      // Enviar el mensaje de forma asíncrona
-      const resultado = await enviarWhatsApp(numeroPropio, numeroContacto, mensaje);
-
-      // Editar la respuesta con el resultado
-      try {
-        const followupUrl = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
-        await fetch(followupUrl, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: resultado.success
-              ? `✅ ${resultado.message}\n📱 ID: ${resultado.messageId}`
-              : `❌ Error: ${resultado.error}`,
-          }),
-        });
-      } catch (error) {
-        console.error('Error actualizando mensaje:', error);
-      }
-      return;
     }
 
     // Comando /email para enviar emails
@@ -463,23 +442,17 @@ client.once('ready', async () => {
       },
       {
         name: 'wsp',
-        description: 'Envía un mensaje de WhatsApp',
+        description: 'Genera un enlace de WhatsApp con mensaje prellenado',
         options: [
           {
-            name: 'numero_propio',
-            description: 'Tu número de WhatsApp (formato: +5491111111111)',
-            type: 3, // STRING
-            required: true,
-          },
-          {
             name: 'numero_contacto',
-            description: 'Número del contacto a quien enviar (formato: +5491111111111)',
+            description: 'Número del contacto (ej: +5491111111111 o 5491111111111)',
             type: 3, // STRING
             required: true,
           },
           {
             name: 'mensaje',
-            description: 'Mensaje a enviar',
+            description: 'Mensaje a prellenar en WhatsApp',
             type: 3, // STRING
             required: true,
           },
@@ -608,23 +581,17 @@ app.get('/register-commands', async (req: any, res: any) => {
       },
       {
         name: 'wsp',
-        description: 'Envía un mensaje de WhatsApp',
+        description: 'Genera un enlace de WhatsApp con mensaje prellenado',
         options: [
           {
-            name: 'numero_propio',
-            description: 'Tu número de WhatsApp (formato: +5491111111111)',
-            type: 3, // STRING
-            required: true,
-          },
-          {
             name: 'numero_contacto',
-            description: 'Número del contacto a quien enviar (formato: +5491111111111)',
+            description: 'Número del contacto (ej: +5491111111111 o 5491111111111)',
             type: 3, // STRING
             required: true,
           },
           {
             name: 'mensaje',
-            description: 'Mensaje a enviar',
+            description: 'Mensaje a prellenar en WhatsApp',
             type: 3, // STRING
             required: true,
           },
@@ -719,23 +686,17 @@ app.post('/register-commands', async (req: any, res: any) => {
       },
       {
         name: 'wsp',
-        description: 'Envía un mensaje de WhatsApp',
+        description: 'Genera un enlace de WhatsApp con mensaje prellenado',
         options: [
           {
-            name: 'numero_propio',
-            description: 'Tu número de WhatsApp (formato: +5491111111111)',
-            type: 3, // STRING
-            required: true,
-          },
-          {
             name: 'numero_contacto',
-            description: 'Número del contacto a quien enviar (formato: +5491111111111)',
+            description: 'Número del contacto (ej: +5491111111111 o 5491111111111)',
             type: 3, // STRING
             required: true,
           },
           {
             name: 'mensaje',
-            description: 'Mensaje a enviar',
+            description: 'Mensaje a prellenar en WhatsApp',
             type: 3, // STRING
             required: true,
           },
