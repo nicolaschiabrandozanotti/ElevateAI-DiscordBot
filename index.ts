@@ -3,9 +3,16 @@ import { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } from 'discord.j
 import nacl from 'tweetnacl';
 import twilio from 'twilio';
 import nodemailer from 'nodemailer';
+import makeWASocket, { DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import qrcode from 'qrcode-terminal';
 
 const app = express();
 const PORT = Deno.env.get('PORT') || '3000';
+
+// Variable global para el socket de WhatsApp
+let whatsappSocket: any = null;
+let whatsappReady = false;
 
 // Configuración de Discord
 const client = new Client({
@@ -69,7 +76,100 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
-// Función para generar enlace de WhatsApp (wa.me)
+// Función para inicializar WhatsApp con Baileys
+async function inicializarWhatsApp() {
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState('whatsapp_auth');
+    const { version } = await fetchLatestBaileysVersion();
+    
+    const socket = makeWASocket({
+      version,
+      printQRInTerminal: true,
+      auth: state,
+      generateHighQualityLinkPreview: true,
+    });
+
+    socket.ev.on('creds.update', saveCreds);
+
+    socket.ev.on('connection.update', (update) => {
+      const { connection, lastDisconnect, qr } = update;
+      
+      if (qr) {
+        console.log('\n📱 Escanea este código QR con WhatsApp:');
+        qrcode.generate(qr, { small: true });
+      }
+      
+      if (connection === 'close') {
+        const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+        console.log('Conexión cerrada debido a ', lastDisconnect?.error, ', reconectando ', shouldReconnect);
+        
+        if (shouldReconnect) {
+          inicializarWhatsApp();
+        } else {
+          whatsappReady = false;
+          whatsappSocket = null;
+        }
+      } else if (connection === 'open') {
+        console.log('✅ WhatsApp conectado exitosamente');
+        whatsappReady = true;
+      }
+    });
+
+    socket.ev.on('messages.upsert', () => {
+      // Manejar mensajes entrantes si es necesario
+    });
+
+    whatsappSocket = socket;
+    return socket;
+  } catch (error: any) {
+    console.error('Error inicializando WhatsApp:', error);
+    whatsappReady = false;
+    return null;
+  }
+}
+
+// Función para enviar mensaje de WhatsApp automáticamente
+async function enviarWhatsAppAutomatico(numeroContacto: string, mensaje: string) {
+  try {
+    if (!whatsappReady || !whatsappSocket) {
+      return { 
+        success: false, 
+        error: 'WhatsApp no está conectado. Inicializa la conexión primero.',
+        enlace: generarEnlaceWhatsApp(numeroContacto, mensaje).enlace
+      };
+    }
+
+    // Limpiar y formatear el número
+    let numeroLimpio = numeroContacto.replace(/[\s\-\(\)]/g, '');
+    if (!numeroLimpio.startsWith('+')) {
+      numeroLimpio = '+' + numeroLimpio;
+    }
+    
+    // Formatear número para WhatsApp (código de país + número sin +)
+    const numeroJid = `${numeroLimpio}@s.whatsapp.net`;
+    
+    // Enviar mensaje
+    await whatsappSocket.sendMessage(numeroJid, { text: mensaje });
+    
+    return { 
+      success: true, 
+      message: 'Mensaje de WhatsApp enviado exitosamente',
+      numero: numeroLimpio
+    };
+  } catch (error: any) {
+    console.error('Error enviando WhatsApp:', error);
+    // Si falla, devolver enlace como fallback
+    const enlace = generarEnlaceWhatsApp(numeroContacto, mensaje);
+    return { 
+      success: false, 
+      error: error.message,
+      enlace: enlace.enlace,
+      fallback: true
+    };
+  }
+}
+
+// Función para generar enlace de WhatsApp (wa.me) - fallback
 function generarEnlaceWhatsApp(numeroContacto: string, mensaje: string) {
   try {
     // Limpiar y formatear el número (eliminar espacios, guiones, paréntesis, etc.)
@@ -227,7 +327,7 @@ app.post('/interactions', verifySignature, async (req: any, res: any) => {
       }
     }
 
-    // Comando /wsp para generar enlace de WhatsApp
+    // Comando /wsp para enviar mensajes de WhatsApp
     if (interaction.data.name === 'wsp') {
       const options = interaction.data.options || [];
       const numeroContacto = options.find((opt: any) => opt.name === 'numero_contacto')?.value;
@@ -243,19 +343,73 @@ app.post('/interactions', verifySignature, async (req: any, res: any) => {
         });
       }
 
-      // Generar enlace de WhatsApp
-      const resultado = generarEnlaceWhatsApp(numeroContacto, mensaje);
-
-      // Responder con el enlace
-      return res.json({
+      // Responder inmediatamente
+      res.json({
         type: 4,
         data: {
-          content: resultado.success
-            ? `✅ ${resultado.mensaje}\n\n📱 **Enlace de WhatsApp:**\n${resultado.enlace}\n\n👆 Haz clic en el enlace para abrir WhatsApp con el mensaje prellenado.`
-            : `❌ Error: ${resultado.error}`,
+          content: '📱 Enviando mensaje de WhatsApp...',
           flags: 64, // EPHEMERAL
         },
       });
+
+      // Intentar enviar automáticamente
+      const resultado = await enviarWhatsAppAutomatico(numeroContacto, mensaje);
+
+      // Editar la respuesta con el resultado
+      try {
+        const followupUrl = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
+        await fetch(followupUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: resultado.success
+              ? `✅ ${resultado.message}\n📱 Enviado a: ${resultado.numero}`
+              : resultado.fallback
+              ? `⚠️ WhatsApp no está conectado. Usa este enlace:\n\n${resultado.enlace}\n\n💡 Para enviar automáticamente, inicializa WhatsApp con: \`/wsp_init\``
+              : `❌ Error: ${resultado.error}\n\n📱 Enlace alternativo: ${resultado.enlace || 'No disponible'}`,
+          }),
+        });
+      } catch (error) {
+        console.error('Error actualizando mensaje:', error);
+      }
+      return;
+    }
+
+    // Comando /wsp_init para inicializar WhatsApp
+    if (interaction.data.name === 'wsp_init') {
+      // Responder inmediatamente
+      res.json({
+        type: 4,
+        data: {
+          content: '📱 Inicializando WhatsApp... Revisa la consola del servidor para ver el código QR.',
+          flags: 64, // EPHEMERAL
+        },
+      });
+
+      // Inicializar WhatsApp
+      try {
+        await inicializarWhatsApp();
+        // Editar respuesta después de un momento
+        setTimeout(async () => {
+          try {
+            const followupUrl = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
+            await fetch(followupUrl, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                content: whatsappReady
+                  ? '✅ WhatsApp conectado exitosamente. Ya puedes usar `/wsp` para enviar mensajes automáticamente.'
+                  : '📱 Revisa la consola del servidor y escanea el código QR con WhatsApp.\n\nUna vez conectado, podrás usar `/wsp` para enviar mensajes automáticamente.',
+              }),
+            });
+          } catch (error) {
+            console.error('Error actualizando mensaje:', error);
+          }
+        }, 2000);
+      } catch (error: any) {
+        console.error('Error inicializando WhatsApp:', error);
+      }
+      return;
     }
 
     // Comando /email para enviar emails
@@ -442,7 +596,7 @@ client.once('ready', async () => {
       },
       {
         name: 'wsp',
-        description: 'Genera un enlace de WhatsApp con mensaje prellenado',
+        description: 'Envía un mensaje de WhatsApp automáticamente (requiere WhatsApp inicializado)',
         options: [
           {
             name: 'numero_contacto',
@@ -452,11 +606,15 @@ client.once('ready', async () => {
           },
           {
             name: 'mensaje',
-            description: 'Mensaje a prellenar en WhatsApp',
+            description: 'Mensaje a enviar',
             type: 3, // STRING
             required: true,
           },
         ],
+      },
+      {
+        name: 'wsp_init',
+        description: 'Inicializa la conexión de WhatsApp (muestra QR para escanear)',
       },
       {
         name: 'email',
@@ -581,7 +739,7 @@ app.get('/register-commands', async (req: any, res: any) => {
       },
       {
         name: 'wsp',
-        description: 'Genera un enlace de WhatsApp con mensaje prellenado',
+        description: 'Envía un mensaje de WhatsApp automáticamente (requiere WhatsApp inicializado)',
         options: [
           {
             name: 'numero_contacto',
@@ -591,11 +749,15 @@ app.get('/register-commands', async (req: any, res: any) => {
           },
           {
             name: 'mensaje',
-            description: 'Mensaje a prellenar en WhatsApp',
+            description: 'Mensaje a enviar',
             type: 3, // STRING
             required: true,
           },
         ],
+      },
+      {
+        name: 'wsp_init',
+        description: 'Inicializa la conexión de WhatsApp (muestra QR para escanear)',
       },
       {
         name: 'email',
@@ -686,7 +848,7 @@ app.post('/register-commands', async (req: any, res: any) => {
       },
       {
         name: 'wsp',
-        description: 'Genera un enlace de WhatsApp con mensaje prellenado',
+        description: 'Envía un mensaje de WhatsApp automáticamente (requiere WhatsApp inicializado)',
         options: [
           {
             name: 'numero_contacto',
@@ -696,11 +858,15 @@ app.post('/register-commands', async (req: any, res: any) => {
           },
           {
             name: 'mensaje',
-            description: 'Mensaje a prellenar en WhatsApp',
+            description: 'Mensaje a enviar',
             type: 3, // STRING
             required: true,
           },
         ],
+      },
+      {
+        name: 'wsp_init',
+        description: 'Inicializa la conexión de WhatsApp (muestra QR para escanear)',
       },
       {
         name: 'email',

@@ -4,6 +4,7 @@ node_modules/
 .DS_Store
 dist/
 build/
+whatsapp_auth/
 
 # Excluir archivos de documentación (excepto README.md)
 GUIA_ENDPOINT.md
