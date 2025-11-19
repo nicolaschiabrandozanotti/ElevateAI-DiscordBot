@@ -3,9 +3,9 @@ import { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } from 'discord.j
 import nacl from 'tweetnacl';
 import twilio from 'twilio';
 import nodemailer from 'nodemailer';
-import makeWASocket, { DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import qrcode from 'qrcode-terminal';
+
+// Importaciones de WhatsApp (opcionales - solo si están disponibles)
+// Nota: Baileys puede no estar disponible en Deno Deploy, por lo que usamos enlaces wa.me como fallback
 
 const app = express();
 const PORT = Deno.env.get('PORT') || '3000';
@@ -79,6 +79,12 @@ function hexToUint8Array(hex: string): Uint8Array {
 // Función para inicializar WhatsApp con Baileys
 async function inicializarWhatsApp() {
   try {
+    // Intentar cargar Baileys dinámicamente
+    const baileys = await import('@whiskeysockets/baileys');
+    const { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, default: makeWASocket } = baileys;
+    const { Boom } = await import('@hapi/boom');
+    const qrcode = (await import('qrcode-terminal')).default;
+
     const { state, saveCreds } = await useMultiFileAuthState('whatsapp_auth');
     const { version } = await fetchLatestBaileysVersion();
     
@@ -91,7 +97,7 @@ async function inicializarWhatsApp() {
 
     socket.ev.on('creds.update', saveCreds);
 
-    socket.ev.on('connection.update', (update) => {
+    socket.ev.on('connection.update', (update: any) => {
       const { connection, lastDisconnect, qr } = update;
       
       if (qr) {
@@ -100,7 +106,7 @@ async function inicializarWhatsApp() {
       }
       
       if (connection === 'close') {
-        const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+        const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
         console.log('Conexión cerrada debido a ', lastDisconnect?.error, ', reconectando ', shouldReconnect);
         
         if (shouldReconnect) {
@@ -122,7 +128,8 @@ async function inicializarWhatsApp() {
     whatsappSocket = socket;
     return socket;
   } catch (error: any) {
-    console.error('Error inicializando WhatsApp:', error);
+    console.error('Error inicializando WhatsApp (Baileys no disponible):', error.message);
+    console.warn('⚠️ El envío automático no está disponible. Se usará el enlace wa.me como alternativa.');
     whatsappReady = false;
     return null;
   }
@@ -135,7 +142,8 @@ async function enviarWhatsAppAutomatico(numeroContacto: string, mensaje: string)
       return { 
         success: false, 
         error: 'WhatsApp no está conectado. Inicializa la conexión primero.',
-        enlace: generarEnlaceWhatsApp(numeroContacto, mensaje).enlace
+        enlace: generarEnlaceWhatsApp(numeroContacto, mensaje).enlace,
+        fallback: true
       };
     }
 
